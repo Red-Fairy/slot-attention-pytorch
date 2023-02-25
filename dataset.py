@@ -8,13 +8,13 @@ from torchvision import transforms
 from torch.utils.data import Dataset, DataLoader
 from torch.utils.data.dataloader import default_collate
 
-class PARTNET(Dataset):
-    def __init__(self, split='train'):
-        super(PARTNET, self).__init__()
+class CLEVR(Dataset):
+    def __init__(self, root, split='train'):
+        super(CLEVR, self,).__init__()
         
         assert split in ['train', 'val', 'test']
         self.split = split
-        self.root_dir = your_path     
+        self.root_dir = root  
         self.files = os.listdir(self.root_dir)
         self.img_transform = transforms.Compose([
                transforms.ToTensor()])
