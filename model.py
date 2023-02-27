@@ -71,7 +71,7 @@ def build_grid(resolution):
     grid = np.reshape(grid, [resolution[0], resolution[1], -1])
     grid = np.expand_dims(grid, axis=0)
     grid = grid.astype(np.float32)
-    return torch.from_numpy(np.concatenate([grid, 1.0 - grid], axis=-1)).to(device)
+    return torch.from_numpy(np.concatenate([grid, 1.0 - grid], axis=-1)).to(device) # 
 
 """Adds soft positional embedding with learnable projection."""
 class SoftPositionEmbed(nn.Module):
@@ -127,7 +127,7 @@ class Decoder(nn.Module):
 
     def forward(self, x):
         x = self.decoder_pos(x)
-        x = x.permute(0,3,1,2)
+        x = x.permute(0,3,1,2) # B, C, H, W
         x = self.conv1(x)
         x = F.relu(x)
         x = self.conv2(x)
