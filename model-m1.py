@@ -35,11 +35,12 @@ class SlotAttention(nn.Module):
         self.slots_mu = nn.Parameter(torch.randn(1, 1, dim))
         self.slots_sigma = nn.Parameter(torch.rand(1, 1, dim))
 
-        self.pos_emb = SoftPositionEmbed(dim, resolution=resolution, flatten=True)
-
         self.to_q = nn.Linear(dim, dim)
-        self.to_k = nn.Linear(dim, dim)
-        self.to_v = nn.Linear(dim, dim)
+        # self.to_k = nn.Linear(dim, dim)
+        # self.to_v = nn.Linear(dim, dim)
+        
+        self.to_k = MLPwithPosEmbedding(dim, resolution, hidden_dim)
+        self.to_v = MLPwithPosEmbedding(dim, resolution, hidden_dim)
 
         self.gru = nn.GRUCell(dim, dim)
 
