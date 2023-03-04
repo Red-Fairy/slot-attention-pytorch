@@ -1,7 +1,7 @@
 import os
 import argparse
 from dataset import *
-from model-m1 import *
+from model_m1 import *
 from tqdm import tqdm
 import time
 import datetime

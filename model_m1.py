@@ -6,7 +6,7 @@ import torch.nn.functional as F
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-class MLPwithPosEmbedding(nn.Module):
+class EncoderPosEmbedding(nn.Module):
     def __init__(self, dim, resolution, hidden_dim=128, scale_factor=5):
         super().__init__()
         self.grid = build_grid(resolution, single=True)
@@ -57,29 +57,34 @@ class MLPwithPosEmbedding(nn.Module):
         return k, v # (b, n, h*w, d)
 
 class DecoderPosEmbedding(nn.Module):
-    def __init__(self, resolution=(8, 8), hidden_dim=128):
+    def __init__(self, resolution=(8, 8), hidden_dim=128, scale_factor=5):
         super().__init__()
-        self.grid_embed = nn.Linear(2, hidden_dim, bias=True)
+        self.grid_embed = nn.Linear(4, hidden_dim, bias=True)
         self.grid = build_grid(resolution, single=True) # (1, h, w, 2)
+        self.scale_factor = scale_factor
 
     def apply_rel_position_scale(self, grid, position, scale):
         """
         grid: (1, h, w, 2)
-        position (batch, number_slots, 2)
-        scale (batch, number_slots, 2)
+        position (batch*number_slots, 2)
+        scale (batch*number_slots, 2)
         """
-        b, n, _ = position.shape
         h, w = grid.shape[1:3]
-        grid = grid.view(1, 1, h, w, 2)
-        grid = grid.repeat(b, n, 1, 1, 1)
-        position = position.view(b, n, 1, 1, 2)
-        # position = position.repeat(1, 1, h, w, 1)
-        scale = scale.view(b, n, 1, 1, 2)
+        bns = position.shape[0]
+        grid = grid.expand(bns, h, w, 2)
+        position = position.unsqueeze(1).unsqueeze(1).expand(bns, h, w, 2) # bns, h, w, 2
+        scale = scale.unsqueeze(1).unsqueeze(1).expand(bns, h, w, 2)
         return ((grid - position) / (scale * self.scale_factor + 1e-8))
 
     def forward(self, x, position_latent, scale_latent):
-        rel_grid = self.apply_rel_position_scale(self.grid, position_latent, scale_latent) # (b, n, h, w, 2)
-        grid_embed = self.grid_embed(rel_grid) # (b, n, h, w, d)
+        '''
+        x: (b*n_s, h, w, d)
+        position_latent: (b, n_s, 2)
+        '''
+        rel_grid = self.apply_rel_position_scale(self.grid, position_latent, scale_latent) # (bns, h, w, 2)
+        rel_grid = torch.cat([rel_grid, -rel_grid], dim=-1) # (bns, h, w, 4)
+        grid_embed = self.grid_embed(rel_grid) # (bns, h, w, d)
+        # print(x.shape, grid_embed.shape)
         
         return x + grid_embed
 
@@ -109,7 +114,7 @@ class SlotAttention(nn.Module):
         # self.to_k = nn.Linear(dim, dim)
         # self.to_v = nn.Linear(dim, dim)
         
-        self.to_kv = MLPwithPosEmbedding(dim, resolution, hidden_dim, scale_factor=5)
+        self.to_kv = EncoderPosEmbedding(dim, resolution, hidden_dim, scale_factor=5)
 
         self.gru = nn.GRUCell(dim, dim)
 
@@ -125,15 +130,15 @@ class SlotAttention(nn.Module):
         self.grid = build_grid(resolution, single=True).flatten(-3, -2) # (1, h*w, 2)
 
     def forward(self, inputs, num_slots = None):
-        b, n, d = inputs.shape
+        b, hw, d = inputs.shape # b, hw, d
         n_s = num_slots if num_slots is not None else self.num_slots
         
-        mu = self.slots_mu.expand(b, n_s, -1)
-        sigma = self.slots_sigma.expand(b, n_s, -1) # (b, n, dim)
+        mu = self.slots_mu.expand(b, n_s, -1) # (b, n_s, dim)
+        sigma = self.slots_sigma.expand(b, n_s, -1) # (b, n_s, dim)
         slots = torch.normal(mu, sigma)
 
-        position_latent = self.position_latent.repeat(b, 1, 1) # (b, n, 2)
-        scale_latent = self.scale_latent.repeat(b, 1, 1) # (b, n, 2)
+        position_latent = self.position_latent.repeat(b, 1, 1) # (b, n_s, 2)
+        scale_latent = self.scale_latent.repeat(b, 1, 1) # (b, n_s, 2)
 
         inputs = self.norm_input(inputs)        
 
@@ -144,27 +149,28 @@ class SlotAttention(nn.Module):
             q = self.to_q(slots)
 
             # compute k and v in every iteration, because relative position/scale is updated
-            # (b, n, h*w, d), we have n (num_slots) different keys and values
+            # (b, n_s, h*w, d), we have n_s (num_slots) different keys and values
             k, v = self.to_kv(inputs, position_latent, scale_latent)
 
-            dots = torch.einsum('bid,bjnd->bjin', q, k) * self.scale # q: (b, n, d), k: (b, n, h*w, d), output: (b, n, n, h*w)
+            dots = torch.einsum('bid,bjnd->bijn', q, k) * self.scale # q: (b, n_s, d), k: (b, n_s, hw, d), output: (b, n_s, n_s, hw)
             # softmax on the slot axis
-            attn = dots.softmax(dim=2) + self.eps
-            # generate updates, attn: (b, n, n, h*w), v: (b, n, h*w, d), output: (b, n, d)
-            updates = torch.einsum('bjin,bjnd->bid', attn, v) # attn: (b, n, n, h*w), v: (b, n, h*w, d), output: (b, n, d)
-
+            attn = dots.softmax(dim=1) + self.eps
+            # generate updates, attn: (b, n_s, n_s, hw), v: (b, n_s, hw, d), output: (b, n_s, d)
+            updates = torch.einsum('bijn,bjnd->bid', attn, v) # attn: (b, n_s, n_s, hw), v: (b, n_s, hw, d), output: (b, n, d)
+            # print(updates.shape)
+            # print(slots.shape)
 
             if it != self.iters - 1:
-                slots = self.gru(updates.reshape(b*n, d), slots_prev.reshape(b*n, d)).reshape(b, n, d)
+                slots = self.gru(updates.reshape(b*n_s, d), slots_prev.reshape(b*n_s, d)).reshape(b, n_s, d)
                 slots = slots + self.fc2(F.relu(self.fc1(self.norm_pre_ff(slots))))
 
             # update position and scale
-            # first sum over the input dimension, output b, n, h*w
-            attn = attn.sum(dim=1)
-            grid = self.grid.expand(b, -1, -1) # (b, h*w, 2)
-            position_latent = torch.einsum('bij,bjd->bid', attn, grid) # attn: (b, n, h*w), grid: (b, h*w, 2), output: (b, n, 2)
-            rel_pos = grid.unsqueeze(1) - position_latent.unsqueeze(2) # grid: (b, h*w, 2), position_latent: (b, n, 2), output: (b, n, h*w, 2)
-            scale_latent = torch.sqrt(torch.einsum('bij,bijd->bid', attn + self.eps, rel_pos ** 2)) # attn: (b, n, h*w), rel_pos: (b, n, h*w, 2), output: (b, n, 2)
+            # first sum over the input dimension, output b, n_s, n_s, h*w
+            attn = attn / attn.sum(dim=-1, keepdim=True)
+            grid = self.grid.unsqueeze(1).expand(b, n_s, -1, -1) # (b, n_s, h*w, 2)
+            position_latent = torch.einsum('bijk,bjkl->bil', attn, grid) # attn: (b, n, n, h*w), grid: (b, n, h*w, 2), output: (b, n, 2)
+            rel_pos = grid - position_latent.unsqueeze(2).expand_as(grid) # grid: (b, n_s, h*w, 2), position_latent: (b, n_s, 1, 2), output: (b, n, h*w, 2)
+            scale_latent = torch.sqrt(torch.einsum('bijk,bjkl->bil', attn + self.eps, rel_pos ** 2)) # attn: (b, n, h*w), rel_pos: (b, n, h*w, 2), output: (b, n, 2)
 
 
             # for i in range(n_s):
@@ -329,13 +335,17 @@ class SlotAttentionAutoEncoder(nn.Module):
         # Slot Attention module.
         slots, position_latent, scale_latent = self.slot_attention(x)
         # `slots` has shape: [batch_size, num_slots, slot_size].
+        # position_latent has shape: [batch_size, num_slots, 2]
+        # scale_latent has shape: [batch_size, num_slots, 2]
 
         # """Broadcast slot features to a 2D grid and collapse slot dimension.""".
         slots = slots.reshape((-1, slots.shape[-1])).unsqueeze(1).unsqueeze(2)
-        slots = slots.repeat((1, 8, 8, 1)) # (b, h, w, dim)
+        slots = slots.repeat((1, 8, 8, 1)) # (b*n_s, h, w, dim)
+        position_latent = position_latent.reshape((-1, position_latent.shape[-1]))
+        scale_latent = scale_latent.reshape((-1, scale_latent.shape[-1]))
         
         # `slots` has shape: [batch_size*num_slots, width_init, height_init, slot_size].
-        x = self.decoder_cnn(slots)
+        x = self.decoder_cnn(slots, position_latent, scale_latent)
         # `x` has shape: [batch_size*num_slots, width, height, num_channels+1].
 
         # Undo combination of slot and batch dimension; split alpha masks.
