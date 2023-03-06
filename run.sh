@@ -7,8 +7,8 @@
 # only use the following on partition with GPUs
 #SBATCH --gres=gpu:a5000:1
 
-#SBATCH --job-name="cube"
-#SBATCH --output=cube-0225-%j.out
+#SBATCH --job-name="invariant-slot-attention"
+#SBATCH --output=logs/ISA-%j.out
 
 # only use the following if you want email notification
 ####SBATCH --mail-user=youremailaddress

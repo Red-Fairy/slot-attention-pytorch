@@ -7,8 +7,9 @@ import time
 import datetime
 import torch.optim as optim
 import torch
-from utils import logger
+from utils import logger, visual
 import math
+
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -37,6 +38,7 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 opt.model_dir = os.path.join('experiments',opt.model_dir)
 os.makedirs(opt.model_dir, exist_ok=True)
 os.makedirs(os.path.join(opt.model_dir,'weights'), exist_ok=True)
+os.makedirs(os.path.join(opt.model_dir,'visuals'), exist_ok=True)
 
 log = logger(opt.model_dir)
 
@@ -91,17 +93,14 @@ while True:
 
     total_loss /= len(train_dataloader)
 
+    visual(model, opt.model_dir, epoch)
+
     log.info("Epoch: {}, Loss: {}, Time: {}".format(epoch, total_loss,
         datetime.timedelta(seconds=time.time() - start)))
 
     torch.save({
         'model_state_dict': model.state_dict(),
-        }, os.path.join(opt.model_dir, 'weights/model.ckpt'.format(epoch)))
-    
-    if i % 25000 == 0:
-        torch.save({
-            'model_state_dict': model.state_dict(),
-            }, os.path.join(opt.model_dir, 'weights/model_{}.ckpt'.format(i)))
+        }, os.path.join(opt.model_dir, 'weights/model_{}.ckpt'.format(epoch)))
         
     if i > opt.num_steps:
         break

@@ -13,9 +13,10 @@ num_iterations = 3
 resolution = (128, 128)
 
 model = SlotAttentionAutoEncoder(resolution, num_slots, num_iterations, 64)
-model.load_state_dict(torch.load('./experiments/debut-m1/weights/model.ckpt')['model_state_dict'])
+model.load_state_dict(torch.load('./experiments/debut-m1/weights/model40.ckpt')['model_state_dict'])
 
-test_set = CLEVR(root='/viscam/data/clevr' ,split='test')
+test_set = CLEVR(root='/viscam/data/clevr' ,split='train')
+print('data loaded')
 
 model = model.to(device)
 image = test_set[2]['image']

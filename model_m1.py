@@ -3,14 +3,16 @@ import numpy as np
 from torch import nn
 import torch
 import torch.nn.functional as F
+import matplotlib.pyplot as plt
+from PIL import Image as Image, ImageEnhance
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class EncoderPosEmbedding(nn.Module):
     def __init__(self, dim, resolution, hidden_dim=128, scale_factor=5):
         super().__init__()
-        self.grid = build_grid(resolution, single=True)
-        self.grid_embed = nn.Linear(4, dim, bias=True)
+        self.grid = build_grid(resolution, single=True) # (1, h, w, 2)
+        self.grid_embed = nn.Linear(2, dim, bias=True)
         self.input_to_k = nn.Linear(dim, dim, bias=False)
         self.input_to_v = nn.Linear(dim, dim, bias=False)
 
@@ -36,7 +38,7 @@ class EncoderPosEmbedding(nn.Module):
         position = position.view(b, n, 1, 1, 2)
         # position = position.repeat(1, 1, h, w, 1)
         scale = scale.view(b, n, 1, 1, 2)
-        return ((grid - position) / (scale * self.scale_factor + 1e-8))
+        return ((grid - position) / (scale * self.scale_factor + 1e-8)) # (b, n, h, w, 2)
 
     def forward(self, x, position_latent=None, scale_latent=None):
 
@@ -47,7 +49,9 @@ class EncoderPosEmbedding(nn.Module):
             rel_grid = self.apply_rel_position_scale(self.grid, position_latent, scale_latent)
         else:
             rel_grid = self.grid
-        rel_grid = torch.cat([rel_grid, -rel_grid], dim=-1).flatten(-3, -2) # (b, n, h*w, 4)
+        rel_grid = rel_grid.flatten(-3, -2)
+
+        # rel_grid = torch.cat([rel_grid, -rel_grid], dim=-1).flatten(-3, -2) # (b, n, h*w, 4)
 
         grid_embed = self.grid_embed(rel_grid) # (b, n, h*w, d)
 
@@ -59,7 +63,7 @@ class EncoderPosEmbedding(nn.Module):
 class DecoderPosEmbedding(nn.Module):
     def __init__(self, resolution=(8, 8), hidden_dim=128, scale_factor=5):
         super().__init__()
-        self.grid_embed = nn.Linear(4, hidden_dim, bias=True)
+        self.grid_embed = nn.Linear(2, hidden_dim, bias=True)
         self.grid = build_grid(resolution, single=True) # (1, h, w, 2)
         self.scale_factor = scale_factor
 
@@ -82,7 +86,7 @@ class DecoderPosEmbedding(nn.Module):
         position_latent: (b, n_s, 2)
         '''
         rel_grid = self.apply_rel_position_scale(self.grid, position_latent, scale_latent) # (bns, h, w, 2)
-        rel_grid = torch.cat([rel_grid, -rel_grid], dim=-1) # (bns, h, w, 4)
+        # rel_grid = torch.cat([rel_grid, -rel_grid], dim=-1) # (bns, h, w, 4)
         grid_embed = self.grid_embed(rel_grid) # (bns, h, w, d)
         # print(x.shape, grid_embed.shape)
         
@@ -110,7 +114,7 @@ class SlotAttention(nn.Module):
         self.slots_mu = nn.Parameter(torch.randn(1, 1, dim))
         self.slots_sigma = nn.Parameter(torch.rand(1, 1, dim))
 
-        self.to_q = nn.Linear(dim, dim)
+        self.to_q = nn.Linear(dim, dim, bias=False)
         # self.to_k = nn.Linear(dim, dim)
         # self.to_v = nn.Linear(dim, dim)
         
@@ -166,7 +170,7 @@ class SlotAttention(nn.Module):
 
             # update position and scale
             # first sum over the input dimension, output b, n_s, n_s, h*w
-            attn = attn / attn.sum(dim=-1, keepdim=True)
+            attn = attn / attn.sum(dim=(-2,-1), keepdim=True) # modified
             grid = self.grid.unsqueeze(1).expand(b, n_s, -1, -1) # (b, n_s, h*w, 2)
             position_latent = torch.einsum('bijk,bjkl->bil', attn, grid) # attn: (b, n, n, h*w), grid: (b, n, h*w, 2), output: (b, n, 2)
             rel_pos = grid - position_latent.unsqueeze(2).expand_as(grid) # grid: (b, n_s, h*w, 2), position_latent: (b, n_s, 1, 2), output: (b, n, h*w, 2)

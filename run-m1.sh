@@ -7,8 +7,8 @@
 # only use the following on partition with GPUs
 #SBATCH --gres=gpu:a5000:1
 
-#SBATCH --job-name="cube"
-#SBATCH --output=cube-0225-%j.out
+#SBATCH --job-name="invariant-slot-attention"
+#SBATCH --output=logs/ISA-%j.out
 
 # only use the following if you want email notification
 ####SBATCH --mail-user=youremailaddress
@@ -23,7 +23,7 @@ echo "working directory = "$SLURM_SUBMIT_DIR
 
 # sample process (list hostnames of the nodes you've requested)
 # run python
-python train_m1.py --model_dir debut-m1-reviseLR
+python train_m1.py --model_dir m1-visual
 # NPROCS=`srun --nodes=${SLURM_NNODES} bash -c 'hostname' |wc -l`
 # echo NPROCS=$NPROCS
 
