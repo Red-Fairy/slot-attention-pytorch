@@ -172,25 +172,6 @@ class SlotAttention(nn.Module):
             rel_pos = grid - position_latent.unsqueeze(2).expand_as(grid) # grid: (b, n_s, h*w, 2), position_latent: (b, n_s, 1, 2), output: (b, n, h*w, 2)
             scale_latent = torch.sqrt(torch.einsum('bijk,bjkl->bil', attn + self.eps, rel_pos ** 2)) # attn: (b, n, h*w), rel_pos: (b, n, h*w, 2), output: (b, n, 2)
 
-
-            # for i in range(n_s):
-            #     # compute relative position and scale for slot i
-            #     k_i, v_i = k[:, i], v[:, i] # (b, h*w, d)
-            #     dots = torch.einsum('bid,bjd->bij', q, k_i) * self.scale # q: (b, n, d), k_i: (b, h*w, d)
-            #     attn = dots.softmax(dim=1) + self.eps
-            #     attn = attn / attn.sum(dim=-1, keepdim=True) # attn: (b, n, h*w)
-
-            #     # update per slot position and scale with attention and grid
-            #     position_latent[:, i] = torch.einsum('bij,bjd->bid', attn, self.grid).sum(dim=1) / attn.sum(dim=-1).sum(dim=-1, keepdim=True)
-            #     rel_pos = self.grid - position_latent[:, i].unsqueeze(1) # (b, h*w, 2)
-            #     scale_latent[:, i] = torch.sqrt(torch.einsum('bij,bjd->bid', attn, rel_pos ** 2).sum(dim=1) / attn.sum(dim=-1).sum(dim=-1, keepdim=True))
-
-            #     updates = torch.einsum('bjd,bij->bid', v_i, attn) # (b, n, d)
-
-            #     slots[:, i] = self.gru(updates, slots[:, i])
-
-
-
             # dots = torch.einsum('bid,bjd->bij', q, k) * self.scale
             # attn = dots.softmax(dim=1) + self.eps
             # attn = attn / attn.sum(dim=-1, keepdim=True)

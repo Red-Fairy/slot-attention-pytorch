@@ -8,6 +8,7 @@ import datetime
 import torch.optim as optim
 import torch
 from utils import logger
+import math
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -20,10 +21,11 @@ parser.add_argument('--batch_size', default=16, type=int)
 parser.add_argument('--num_slots', default=7, type=int, help='Number of slots in Slot Attention.')
 parser.add_argument('--num_iterations', default=3, type=int, help='Number of attention iterations.')
 parser.add_argument('--hid_dim', default=64, type=int, help='hidden dimension size')
+
 parser.add_argument('--learning_rate', default=0.0004, type=float)
-parser.add_argument('--warmup_steps', default=10000, type=int, help='Number of warmup steps for the learning rate.')
-parser.add_argument('--decay_rate', default=0.5, type=float, help='Rate for the learning rate decay.')
-parser.add_argument('--decay_steps', default=100000, type=int, help='Number of steps for the learning rate decay.')
+parser.add_argument('--warmup_steps', default=50000, type=int, help='Number of warmup steps for the learning rate.')
+parser.add_argument('--num_steps', default=500000, type=int, help='Number of total step.')
+
 parser.add_argument('--num_workers', default=2, type=int, help='number of workers for loading data')
 parser.add_argument('--num_epochs', default=1000, type=int, help='number of workers for loading data')
 
@@ -55,9 +57,12 @@ optimizer = optim.Adam(params, lr=opt.learning_rate)
 
 start = time.time()
 i = 0
-for epoch in range(opt.num_epochs):
-    model.train()
+epoch = 0
 
+while True:
+    epoch += 1
+
+    model.train()
     total_loss = 0
 
     for sample in tqdm(train_dataloader):
@@ -66,10 +71,10 @@ for epoch in range(opt.num_epochs):
         if i < opt.warmup_steps:
             learning_rate = opt.learning_rate * (i / opt.warmup_steps)
         else:
-            learning_rate = opt.learning_rate
-
-        learning_rate = learning_rate * (opt.decay_rate ** (
-            i / opt.decay_steps))
+            # cosine learning rate decay
+            learning_rate = 0.5 * opt.learning_rate * (
+                1 + math.cos(math.pi * (i - opt.warmup_steps) /
+                             (opt.num_steps - opt.warmup_steps)))
 
         optimizer.param_groups[0]['lr'] = learning_rate
         
@@ -93,7 +98,10 @@ for epoch in range(opt.num_epochs):
         'model_state_dict': model.state_dict(),
         }, os.path.join(opt.model_dir, 'weights/model.ckpt'.format(epoch)))
     
-    if epoch % 10 == 0:
+    if i % 25000 == 0:
         torch.save({
             'model_state_dict': model.state_dict(),
-            }, os.path.join(opt.model_dir, 'weights/model{}.ckpt'.format(epoch)))
+            }, os.path.join(opt.model_dir, 'weights/model_{}.ckpt'.format(i)))
+        
+    if i > opt.num_steps:
+        break
