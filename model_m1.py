@@ -5,6 +5,7 @@ import torch
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
 from PIL import Image as Image, ImageEnhance
+import math
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -173,7 +174,7 @@ class SlotAttention(nn.Module):
             attn = attn / attn.sum(dim=(-2,-1), keepdim=True) # modified
             grid = self.grid.unsqueeze(1).expand(b, n_s, -1, -1) # (b, n_s, h*w, 2)
             position_latent = torch.einsum('bijk,bjkl->bil', attn, grid) # attn: (b, n, n, h*w), grid: (b, n, h*w, 2), output: (b, n, 2)
-            rel_pos = grid - position_latent.unsqueeze(2).expand_as(grid) # grid: (b, n_s, h*w, 2), position_latent: (b, n_s, 1, 2), output: (b, n, h*w, 2)
+            rel_pos = grid - position_latent.unsqueeze(2).expand_as(grid) # grid: (b, n_s, h*w, 2), position_latent: (b, n_s, 2), output: (b, n, h*w, 2)
             scale_latent = torch.sqrt(torch.einsum('bijk,bjkl->bil', attn + self.eps, rel_pos ** 2)) # attn: (b, n, h*w), rel_pos: (b, n, h*w, 2), output: (b, n, 2)
 
             # dots = torch.einsum('bid,bjd->bij', q, k) * self.scale
@@ -246,30 +247,36 @@ class Encoder(nn.Module):
         return x
 
 class Decoder(nn.Module):
-    def __init__(self, hid_dim, resolution):
+    def __init__(self, hid_dim, resolution, decoder_initial_size=(16,16)):
         super().__init__()
-        self.conv1 = nn.ConvTranspose2d(hid_dim, hid_dim, 5, stride=(2, 2), padding=2, output_padding=1).to(device)
-        self.conv2 = nn.ConvTranspose2d(hid_dim, hid_dim, 5, stride=(2, 2), padding=2, output_padding=1).to(device)
-        self.conv3 = nn.ConvTranspose2d(hid_dim, hid_dim, 5, stride=(2, 2), padding=2, output_padding=1).to(device)
-        self.conv4 = nn.ConvTranspose2d(hid_dim, hid_dim, 5, stride=(2, 2), padding=2, output_padding=1).to(device)
+
+        self.decode_list = []
+        for _ in range(int(math.log2(128//decoder_initial_size[0]))):
+            self.decode_list.append(nn.ConvTranspose2d(hid_dim, hid_dim, 5, stride=(2, 2), padding=2, output_padding=1).to(device))
+            self.decode_list.append(nn.ReLU())
+
+        self.decode_list = nn.Sequential(*self.decode_list)
+        # self.conv1 = nn.ConvTranspose2d(hid_dim, hid_dim, 5, stride=(2, 2), padding=2, output_padding=1).to(device)
+        # self.conv2 = nn.ConvTranspose2d(hid_dim, hid_dim, 5, stride=(2, 2), padding=2, output_padding=1).to(device)
+        # self.conv3 = nn.ConvTranspose2d(hid_dim, hid_dim, 5, stride=(2, 2), padding=2, output_padding=1).to(device)
+        # self.conv4 = nn.ConvTranspose2d(hid_dim, hid_dim, 5, stride=(2, 2), padding=2, output_padding=1).to(device)
         self.conv5 = nn.ConvTranspose2d(hid_dim, hid_dim, 5, stride=(1, 1), padding=2).to(device)
         self.conv6 = nn.ConvTranspose2d(hid_dim, 4, 3, stride=(1, 1), padding=1)
-        self.decoder_initial_size = (8, 8)
-        self.decoder_pos = DecoderPosEmbedding(self.decoder_initial_size, hid_dim)
+        self.decoder_initial_size = decoder_initial_size
+        self.decoder_pos = DecoderPosEmbedding(resolution=self.decoder_initial_size, hidden_dim=hid_dim)
         self.resolution = resolution
 
     def forward(self, x, position_latent, scale_latent):
         x = self.decoder_pos(x, position_latent, scale_latent)
         x = x.permute(0,3,1,2) # B, C, H, W
-        x = self.conv1(x)
-        x = F.relu(x)
-        x = self.conv2(x)
-        x = F.relu(x)
-#         x = F.pad(x, (4,4,4,4)) # no longer needed
-        x = self.conv3(x)
-        x = F.relu(x)
-        x = self.conv4(x)
-        x = F.relu(x)
+        x = self.decode_list(x)
+        # x = self.conv1(x)
+        # x = F.relu(x)
+        # x = self.conv2(x)
+        # x = self.conv3(x)
+        # x = F.relu(x)
+        # x = self.conv4(x)
+        # x = F.relu(x)
         x = self.conv5(x)
         x = F.relu(x)
         x = self.conv6(x)
@@ -279,7 +286,7 @@ class Decoder(nn.Module):
 
 """Slot Attention-based auto-encoder for object discovery."""
 class SlotAttentionAutoEncoder(nn.Module):
-    def __init__(self, resolution, num_slots, num_iterations, hid_dim):
+    def __init__(self, resolution, num_slots, num_iterations, hid_dim, decoder_resolution=(16,16)):
         """Builds the Slot Attention-based auto-encoder.
         Args:
         resolution: Tuple of integers specifying width and height of input image.
@@ -306,6 +313,8 @@ class SlotAttentionAutoEncoder(nn.Module):
             hidden_dim = 128,
             resolution = self.resolution)
 
+        self.decoder_resolution = decoder_resolution
+
     def forward(self, image):
         # `image` has shape: [batch_size, num_channels, width, height].
 
@@ -325,7 +334,8 @@ class SlotAttentionAutoEncoder(nn.Module):
 
         # """Broadcast slot features to a 2D grid and collapse slot dimension.""".
         slots = slots.reshape((-1, slots.shape[-1])).unsqueeze(1).unsqueeze(2)
-        slots = slots.repeat((1, 8, 8, 1)) # (b*n_s, h, w, dim)
+        h, w = self.decoder_resolution
+        slots = slots.repeat((1, h, w, 1)) # (b*n_s, h, w, dim)
         position_latent = position_latent.reshape((-1, position_latent.shape[-1]))
         scale_latent = scale_latent.reshape((-1, scale_latent.shape[-1]))
         

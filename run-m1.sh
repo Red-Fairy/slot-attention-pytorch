@@ -23,7 +23,7 @@ echo "working directory = "$SLURM_SUBMIT_DIR
 
 # sample process (list hostnames of the nodes you've requested)
 # run python
-python train_m1.py --model_dir m1-visual
+python train_TS.py --model_dir m1-visual-16x16
 # NPROCS=`srun --nodes=${SLURM_NNODES} bash -c 'hostname' |wc -l`
 # echo NPROCS=$NPROCS
 
